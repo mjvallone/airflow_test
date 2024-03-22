@@ -1,6 +1,5 @@
 import pendulum
 from airflow.models.dag import DAG
-# from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.postgres.operators.postgres import PostgresOperator
 
 # Define default arguments

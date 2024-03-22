@@ -1,8 +1,6 @@
 import pendulum
 from airflow import DAG
-from airflow.providers.postgres.operators.postgres import PostgresOperator
 from airflow.operators.python import PythonOperator
-import pandas as pd
 from airflow.hooks.postgres_hook import PostgresHook
 
 default_args = {
@@ -10,8 +8,10 @@ default_args = {
     'start_date': pendulum.datetime(2024, 3, 21, tz='UTC'),
 }
 
-#FIXME
-# Este DAG consume las tablas "alumnos_programas" y "calendario" y agrega a la tabla "alumnos_programas" los campos referidos a la fecha de inicio de una persona.
+# Este DAG consume principalmente la tabla "alumnos_programas", pero hace joins con muchas otras tablas (planes_grupos, planes_materias, alumnos_notas, etc)
+# Su objetivo es generar como output (2 archivos CSVs en este caso):
+# - data por alumnx, indicando cantidad de materias aprobadas y requeridas por cada año y semestre
+# - data por alumnx, indicando cantidad de materias aprobadas y requeridas por cada carrera que cursa
 
 query_alumnos_programas = """
     SELECT ap."N_ID_PERSONA", ap."N_ID_ALU_PROG", ap."N_PROMOCION", ap."C_BAJA", ap."F_BAJA", ap."C_IDENTIFICACION", ap."C_PROGRAMA", ap."C_ORIENTACION", pg.c_plan, pm."N_ID_MATERIA", 
@@ -59,7 +59,7 @@ def process_data():
         # obtengo la carrera actual para las personas que se cambiaron de carrera
         filtered_df = alumnos_programa[(alumnos_programa['C_BAJA'].isnull()) & (alumnos_programa["N_ID_PERSONA"].isin(subjects_to_check["N_ID_PERSONA"]))]
         # me quedo con una row por N_ID_PERSONA
-        current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_PERSONA"])
+        current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_ALU_PROG"])
 
         # reviso cuales de las materias de la carrera previa, deben ser consideradas para la carrera actual
         for index, row in subjects_to_check.iterrows():
@@ -79,12 +79,15 @@ def process_data():
         # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
         filtered_alumnos_programa = alumnos_programa[((alumnos_programa["C_BAJA"] == "CC") & (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"]))) | (alumnos_programa["F_BAJA"].isna())]
 
+        #FIXME si filtered_alumnos_programa tiene alumnos_programa["C_BAJA"] == "CC" , todos los rows de la persona deberian tener el N_ID_ALU_PROG mas alto
+
         # elimino el campo c_baja y f_baja
         filtered_alumnos_programa = filtered_alumnos_programa.drop(columns=["C_BAJA", "F_BAJA"])
-        
+
         # falta la suma de las materias aprobadas
         grouped_alumnos_programa = filtered_alumnos_programa.groupby([
             "N_ID_PERSONA",
+            "N_ID_ALU_PROG",
             "N_PROMOCION",
             "c_plan",
             "ano",
@@ -92,26 +95,22 @@ def process_data():
             "cant_mat_requeridas"
         ]).size().reset_index(name='cant_mat_aprobadas')        
         grouped_alumnos_programa["estado"] = grouped_alumnos_programa["cant_mat_aprobadas"] - grouped_alumnos_programa["cant_mat_requeridas"]
-        print(grouped_alumnos_programa)
-
 
         grouped_by_alumnos = grouped_alumnos_programa.groupby([
-            "N_ID_PERSONA",
+             "N_ID_PERSONA",
+            "N_ID_ALU_PROG",
         ]).agg(
              tot_cant_mat_req=('cant_mat_requeridas', 'sum'),
              tot_cant_mat_apr=('cant_mat_aprobadas', 'sum')
         ).reset_index()
         grouped_by_alumnos["estado"] = grouped_by_alumnos["tot_cant_mat_apr"] - grouped_by_alumnos["tot_cant_mat_req"]
-        print(grouped_by_alumnos)
 
         grouped_alumnos_programa.to_csv("grouped_alumnos_programa.csv", index=False)
         grouped_by_alumnos.to_csv("grouped_by_alumnos.csv", index=False)
 
-        #FIXME revisar que año 3 semestre 1 toma 5 materias requeridas y son 4, esta tomando del IPO de la carrera previa
-
 
 with DAG(
-    dag_id="get_final_alumnos_programas", #FIXME
+    dag_id="get_final_alumnos_programas",
     default_args=default_args,
     catchup=False,
     schedule_interval=None,  # Run manually,
@@ -121,8 +120,6 @@ with DAG(
         task_id="process_data",
         python_callable=process_data,
     )
-
-# tarea5 generar la data condensada, donde hace una row por persona-carrera
 
     # Dependencias entre tareas
     process_data_task
