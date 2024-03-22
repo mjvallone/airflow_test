@@ -47,6 +47,12 @@ def process_data():
         pg_hook = PostgresHook(postgres_conn_id="postgres_db")
         alumnos_programa = pg_hook.get_pandas_df(sql=query_alumnos_programas)
         planes_materias = pg_hook.get_pandas_df(sql=query_planes_materias)
+        planes_materias["unique_key"] = (planes_materias["C_IDENTIFICACION"].astype(int).astype(str) +
+                                 planes_materias["C_PROGRAMA"].astype(int).astype(str) +
+                                 planes_materias["C_ORIENTACION"].astype(int).astype(str) +
+                                 planes_materias["C_PLAN"].astype(int).astype(str) +
+                                 planes_materias["N_ID_MATERIA"].astype(int).astype(str)
+                                ).astype(int)
 
         #obtengo las materias que son de una carrera en la cual la persona no está mas (se cambió de carrera)
         subjects_to_check = alumnos_programa[alumnos_programa['C_BAJA'] == "CC"]
@@ -56,52 +62,41 @@ def process_data():
         filtered_df = alumnos_programa[(alumnos_programa['C_BAJA'].isnull()) & (alumnos_programa["N_ID_PERSONA"].isin(subjects_to_check["N_ID_PERSONA"]))]
         # me quedo con una row por N_ID_PERSONA
         current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_PERSONA"])
-        print(current_degree_for_people_with_cc)
 
         # reviso cuales de las materias de la carrera previa, deben ser consideradas para la carrera actual
         for index, row in subjects_to_check.iterrows():
-            print(f"row: {row}")
-            print('-------------------------')
             persona_row = current_degree_for_people_with_cc[current_degree_for_people_with_cc["N_ID_PERSONA"] == row["N_ID_PERSONA"]]
-            print(f"persona_row: {persona_row}")
-            current_identificacion, current_programa, current_orientacion, current_plan = persona_row[["C_IDENTIFICACION"], ["C_PROGRAMA"], ["C_ORIENTACION"], ["C_PLAN"]]
-            subject_to_check = row["N_ID_MATERIA"]
-            print(current_identificacion, current_programa, current_orientacion, current_plan, subject_to_check)
-            if (planes_materias[planes_materias["C_IDENTIFICACION"] == current_identificacion & planes_materias["C_PROGRAMA"] == current_programa & planes_materias["C_ORIENTACION"] == current_orientacion & planes_materias["C_PLAN"] == current_plan & planes_materias["N_ID_MATERIA"] == subjects_to_check]):
-                # buscar en planes_materias la materia, si la encuentra nos quedamos con la materia, sino FALSE
-                row["found_in_plans_materias"] = True
-        
-        print(subjects_to_check.head())
+            current_data = persona_row[["C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION", "c_plan"]]
+            subject_id_to_check = row["N_ID_MATERIA"]
 
-        print("3")
+            key_to_find = int(f'{int(current_data["C_IDENTIFICACION"].values[0])}{int(current_data["C_PROGRAMA"].values[0])}{int(current_data["C_ORIENTACION"].values[0])}{int(current_data["c_plan"].values[0])}{int(subject_id_to_check)}')
+
+            if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
+                # busco la materia de la carrera anterior en planes_materias de la carrera actual
+                 subjects_to_check.at[index, "found_in_plans_materias"] = True
+
         # filtro las materias que estan en la carrera actual de la persona
         valid_subjects = subjects_to_check[subjects_to_check["found_in_plans_materias"] == True]
-        # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
-        filtered_alumnos_programa = alumnos_programa[(alumnos_programa["C_BAJA"] == "CC" & alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"])) | alumnos_programa["F_BAJA"] is None]
 
-        print("4")
-        # elimino el campo c_baja
+        # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
+        filtered_alumnos_programa = alumnos_programa[((alumnos_programa["C_BAJA"] == "CC") & (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"]))) | (alumnos_programa["F_BAJA"].isna())]
+
+        # elimino el campo c_baja y f_baja
         filtered_alumnos_programa = filtered_alumnos_programa.drop(columns=["C_BAJA", "F_BAJA"])
         
-        print("5")
         # falta la suma de las materias aprobadas
         grouped_alumnos_programa = filtered_alumnos_programa.groupby([
             "N_ID_PERSONA",
             "N_PROMOCION",
-            "C_IDENTIFICACION",
-            "C_PROGRAMA",
-            "C_ORIENTACION",
             "c_plan",
-            "N_ID_MATERIA",
             "ano",
             "semestre",
             "cant_mat_requeridas"
         ]).size().reset_index(name='cant_mat_aprobadas')        
         grouped_alumnos_programa["estado"] = grouped_alumnos_programa["cant_mat_aprobadas"] - grouped_alumnos_programa["cant_mat_requeridas"]
+        print(grouped_alumnos_programa)
 
-        print("6")
         # grouped_alumnos_programa.to_sql("datita", postgres_conn, if_exists="replace", index=False) #FIXME
-
 
 with DAG(
     dag_id="get_final_alumnos_programas", #FIXME
@@ -110,30 +105,12 @@ with DAG(
     schedule_interval=None,  # Run manually,
     tags=['csv', 'postgres'],
 ) as dag:
-
-#     # Tarea para obtener alumnos_programas
-#     get_alumnos_programas = PostgresOperator(
-#         task_id="get_alumnos_programas",
-#         postgres_conn_id="postgres_db",
-#         sql=query_alumnos_programas,        
-#     )
-
-#    # Tarea para obtener planes de materias
-#     get_planes_materias = PostgresOperator(
-#         task_id="get_planes_materias",
-#         postgres_conn_id="postgres_db",
-#         sql=query_planes_materias,
-#     )
-
     process_data_task = PythonOperator(
         task_id="process_data",
         python_callable=process_data,
-        # op_args=[get_alumnos_programas, get_planes_materias],
     )
 
 # tarea5 generar la data condensada, donde hace una row por persona-carrera
 
     # Dependencias entre tareas
     process_data_task
-    # get_alumnos_programas >> process_data_task
-    # get_alumnos_programas >> process_data_task
