@@ -10,13 +10,11 @@ default_args = {
     'start_date': pendulum.datetime(2024, 3, 21, tz='UTC'),
 }
 
-postgres_conn = "postgresql://postgres:postgres@localhost:5432/udesa"
-
 #FIXME
 # Este DAG consume las tablas "alumnos_programas" y "calendario" y agrega a la tabla "alumnos_programas" los campos referidos a la fecha de inicio de una persona.
 
 query_alumnos_programas = """
-    SELECT ap."N_ID_PERSONA", ap."N_PROMOCION", ap."C_BAJA", ap."F_BAJA", ap."C_IDENTIFICACION", ap."C_PROGRAMA", ap."C_ORIENTACION", pg.c_plan, pm."N_ID_MATERIA", 
+    SELECT ap."N_ID_PERSONA", ap."N_ID_ALU_PROG", ap."N_PROMOCION", ap."C_BAJA", ap."F_BAJA", ap."C_IDENTIFICACION", ap."C_PROGRAMA", ap."C_ORIENTACION", pg.c_plan, pm."N_ID_MATERIA", 
     pm."N_ANO_CARRERA" as ano,
     CASE WHEN CAST(MOD(CAST(an.f_rinde as date) - CAST(ap.fecha_inicio AS date),365) AS decimal)/365 > 0.5 THEN 2 ELSE 1 END AS semestre,
     mpc.cantidad_materias AS cant_mat_requeridas
@@ -32,7 +30,7 @@ query_alumnos_programas = """
     AND mpc.ano = pm."N_ANO_CARRERA" 
     AND mpc.semestre = CASE WHEN CAST(MOD(CAST(an.f_rinde AS date) - CAST(ap.fecha_inicio AS date),365) as decimal)/365 > 0.5 THEN 2 ELSE 1 END
     WHERE ap."F_GRADUACION" IS NULL AND pm."N_ANO_CARRERA" <= ((current_date - CAST(ap.fecha_inicio AS date))/365)+1 --limitamos la cantidad de registros para que sea mas liviano
-    AND ap."N_ID_PERSONA" = 200572  --in (229632, 170434, 200572, 175447)
+    AND ap."N_ID_PERSONA" in (229632, 170434, 200572, 175447)
     AND an.m_aprueba_mat ='Si'
     ORDER BY pm."N_ANO_CARRERA", semestre
 """
@@ -96,7 +94,21 @@ def process_data():
         grouped_alumnos_programa["estado"] = grouped_alumnos_programa["cant_mat_aprobadas"] - grouped_alumnos_programa["cant_mat_requeridas"]
         print(grouped_alumnos_programa)
 
-        # grouped_alumnos_programa.to_sql("datita", postgres_conn, if_exists="replace", index=False) #FIXME
+
+        grouped_by_alumnos = grouped_alumnos_programa.groupby([
+            "N_ID_PERSONA",
+        ]).agg(
+             tot_cant_mat_req=('cant_mat_requeridas', 'sum'),
+             tot_cant_mat_apr=('cant_mat_aprobadas', 'sum')
+        ).reset_index()
+        grouped_by_alumnos["estado"] = grouped_by_alumnos["tot_cant_mat_apr"] - grouped_by_alumnos["tot_cant_mat_req"]
+        print(grouped_by_alumnos)
+
+        grouped_alumnos_programa.to_csv("grouped_alumnos_programa.csv", index=False)
+        grouped_by_alumnos.to_csv("grouped_by_alumnos.csv", index=False)
+
+        #FIXME revisar que año 3 semestre 1 toma 5 materias requeridas y son 4, esta tomando del IPO de la carrera previa
+
 
 with DAG(
     dag_id="get_final_alumnos_programas", #FIXME

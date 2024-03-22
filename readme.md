@@ -1,4 +1,4 @@
-# UdeSA Airflow Repositorio de DAGs 
+# Airflow Repositorio de DAGs 
 
 Este repositorio contiene una colección de DAGs (Directed Acyclic Graphs) desarrollados con Apache Airflow. Los DAGs son utilizados para definir, programar y monitorear flujos de trabajo de datos.
 

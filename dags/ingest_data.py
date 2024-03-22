@@ -17,7 +17,7 @@ with DAG(
     schedule_interval=None,  # Run manually,
     tags=['csv', 'postgres'],
 ) as dag:
-
+    # FIXME lo podríamos dejar como ejemplo
     create_table = PostgresOperator(
         task_id='create_table_students',
         postgres_conn_id='postgres_db',
