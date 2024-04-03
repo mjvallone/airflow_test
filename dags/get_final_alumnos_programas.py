@@ -49,47 +49,48 @@ query_materias_carrera = """
     FROM materias_por_carrera mpc
 """
 
-
-def process_data():
-        pg_hook = PostgresHook(postgres_conn_id="postgres_db")
-        alumnos_programa = pg_hook.get_pandas_df(sql=query_alumnos_programas)
-        planes_materias = pg_hook.get_pandas_df(sql=query_planes_materias)
-        materias_carrera = pg_hook.get_pandas_df(sql=query_materias_carrera)
-        planes_materias["unique_key"] = (planes_materias["C_IDENTIFICACION"].astype(int).astype(str) +
+def get_data_with_queries():
+    pg_hook = PostgresHook(postgres_conn_id="postgres_db")
+    alumnos_programa = pg_hook.get_pandas_df(sql=query_alumnos_programas)
+    planes_materias = pg_hook.get_pandas_df(sql=query_planes_materias)
+    materias_carrera = pg_hook.get_pandas_df(sql=query_materias_carrera)
+    planes_materias["unique_key"] = (planes_materias["C_IDENTIFICACION"].astype(int).astype(str) +
                                  planes_materias["C_PROGRAMA"].astype(int).astype(str) +
                                  planes_materias["C_ORIENTACION"].astype(int).astype(str) +
                                  planes_materias["C_PLAN"].astype(int).astype(str) +
                                  planes_materias["N_ID_MATERIA"].astype(int).astype(str)
                                 ).astype(int)
-        print("Queries ejecutados")
-        # Chequeo de materias de personas que cursan 2 carreras o más
+    print("Queries ejecutados")
+    return alumnos_programa,planes_materias,materias_carrera
 
-        counts = alumnos_programa[(alumnos_programa['C_BAJA'].isna())].groupby('N_ID_PERSONA')['N_ID_ALU_PROG'].transform('nunique')
-        # obtengo las materias de las personas que cursan 2 carreras o más
-        subjects_from_people_with_2_more_degrees = alumnos_programa[(alumnos_programa['C_BAJA'].isna()) & (counts >= 2)]
 
-        alumnos_prog_with_2_more_degrees = subjects_from_people_with_2_more_degrees.drop_duplicates(subset=['N_ID_PERSONA','N_ID_ALU_PROG'])[['N_ID_PERSONA','N_ID_ALU_PROG', 'C_IDENTIFICACION', 'C_PROGRAMA', 'C_ORIENTACION', 'c_plan','cant_mat_requeridas']]
+def check_2_more_degrees(alumnos_programa, planes_materias, materias_carrera):
+    counts = alumnos_programa[(alumnos_programa['C_BAJA'].isna())].groupby('N_ID_PERSONA')['N_ID_ALU_PROG'].transform('nunique')
+    # obtengo las materias de las personas que cursan 2 carreras o más
+    subjects_from_people_with_2_more_degrees = alumnos_programa[(alumnos_programa['C_BAJA'].isna()) & (counts >= 2)]
 
-        # recorrer cada n_id_alu_prog y revisar si alguna de las materias de sus otras carreras le sirve para la actual
-        alumnos_programa_to_add = pd.DataFrame(columns=["N_ID_PERSONA", "N_ID_ALU_PROG", "N_PROMOCION", "C_BAJA", "F_BAJA", 
+    alumnos_prog_with_2_more_degrees = subjects_from_people_with_2_more_degrees.drop_duplicates(subset=['N_ID_PERSONA','N_ID_ALU_PROG'])[['N_ID_PERSONA','N_ID_ALU_PROG', 'C_IDENTIFICACION', 'C_PROGRAMA', 'C_ORIENTACION', 'c_plan','cant_mat_requeridas']]
+
+    # recorrer cada n_id_alu_prog y revisar si alguna de las materias de sus otras carreras le sirven para la actual
+    alumnos_programa_to_add = pd.DataFrame(columns=["N_ID_PERSONA", "N_ID_ALU_PROG", "N_PROMOCION", "C_BAJA", "F_BAJA", 
                                                         "C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION", "c_plan", 
                                                         "N_ID_MATERIA", "ano", "semestre", "cant_mat_requeridas"])
-        print("Chequeo de materias de personas que cursan 2 carreras o más")
-        for index, registro in alumnos_prog_with_2_more_degrees.iterrows():
-            id_persona = registro['N_ID_PERSONA']
-            id_alu_prog = registro['N_ID_ALU_PROG']
+    print("Chequeo de materias de personas que cursan 2 carreras o más")
+    for index, registro in alumnos_prog_with_2_more_degrees.iterrows():
+        id_persona = registro['N_ID_PERSONA']
+        id_alu_prog = registro['N_ID_ALU_PROG']
 
-            # ver si las materias de otra carrera estan en en planes_materias para la carrera que se está revisando
-            subjects_from_other_degree = subjects_from_people_with_2_more_degrees[(subjects_from_people_with_2_more_degrees['N_ID_PERSONA'] == id_persona) & (subjects_from_people_with_2_more_degrees['N_ID_ALU_PROG'] != id_alu_prog)]
-            for index, row in subjects_from_other_degree.iterrows():
-                subject_id_to_check = row["N_ID_MATERIA"]
-                key_to_find = int(f'{int(registro["C_IDENTIFICACION"])}{int(registro["C_PROGRAMA"])}{int(registro["C_ORIENTACION"])}{int(registro["c_plan"])}{int(subject_id_to_check)}')
+        # ver si las materias de otra carrera estan en en planes_materias para la carrera que se está revisando
+        subjects_from_other_degree = subjects_from_people_with_2_more_degrees[(subjects_from_people_with_2_more_degrees['N_ID_PERSONA'] == id_persona) & (subjects_from_people_with_2_more_degrees['N_ID_ALU_PROG'] != id_alu_prog)]
+        for index, row in subjects_from_other_degree.iterrows():
+            subject_id_to_check = row["N_ID_MATERIA"]
+            key_to_find = int(f'{int(registro["C_IDENTIFICACION"])}{int(registro["C_PROGRAMA"])}{int(registro["C_ORIENTACION"])}{int(registro["c_plan"])}{int(subject_id_to_check)}')
 
-                if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
-                    # busco la materia de la otra carrera en planes_materias de la carrera que estoy revisando
-                    # se "agrega" esa materia como aprobada en el plan actual (con el IPO actual para que figure en esta carrera tambien)
-                    cant_mat_req = 0
-                    filtered_materias = materias_carrera[
+            if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
+                # busco la materia de la otra carrera en planes_materias de la carrera que estoy revisando
+                # se "agrega" esa materia como aprobada en el plan actual (con el IPO actual para que figure en esta carrera tambien)
+                cant_mat_req = 0
+                filtered_materias = materias_carrera[
                         (materias_carrera['identificacion'] == registro["C_IDENTIFICACION"]) &
                         (materias_carrera['programa'] == registro["C_PROGRAMA"]) &
                         (materias_carrera['orientacion'] == registro["C_ORIENTACION"]) &
@@ -97,68 +98,63 @@ def process_data():
                         (materias_carrera['ano'] == row["ano"]) &
                         (materias_carrera['semestre'] == row["semestre"])
                     ]
-                    if not filtered_materias.empty:
-                        cant_mat_req = filtered_materias['cantidad_materias'].values[0]                   
+                if not filtered_materias.empty:
+                    cant_mat_req = filtered_materias['cantidad_materias'].values[0]                   
 
-                    row["N_ID_ALU_PROG"] = registro["N_ID_ALU_PROG"]
-                    row["C_IDENTIFICACION"] = registro["C_IDENTIFICACION"]
-                    row["C_PROGRAMA"] = registro["C_PROGRAMA"]
-                    row["C_ORIENTACION"] = registro["C_ORIENTACION"]
-                    row["c_plan"] = registro["c_plan"]
-                    row["cant_mat_requeridas"] = cant_mat_req
-                    alumnos_programa_to_add = pd.concat([alumnos_programa_to_add, row.to_frame().T], ignore_index=True)
-        # END Chequeo de materias de personas que cursan 2 carreras o más
+                row["N_ID_ALU_PROG"] = registro["N_ID_ALU_PROG"]
+                row["C_IDENTIFICACION"] = registro["C_IDENTIFICACION"]
+                row["C_PROGRAMA"] = registro["C_PROGRAMA"]
+                row["C_ORIENTACION"] = registro["C_ORIENTACION"]
+                row["c_plan"] = registro["c_plan"]
+                row["cant_mat_requeridas"] = cant_mat_req
+                alumnos_programa_to_add = pd.concat([alumnos_programa_to_add, row.to_frame().T], ignore_index=True)
+    return alumnos_programa_to_add
 
 
-        # Chequeo de materias de personas que cambiaron de carrera
-        print("Chequeo de materias de personas que cambiaron de carrera")
-        #obtengo las materias que son de una carrera en la cual la persona no está mas (se cambió de carrera)
-        subjects_to_check = alumnos_programa[alumnos_programa['C_BAJA'] == "CC"]
-        subjects_to_check["found_in_plans_materias"] = False
+def check_degree_changes(alumnos_programa, planes_materias):
+    print("Chequeo de materias de personas que cambiaron de carrera")
+    #obtengo las materias que son de una carrera en la cual la persona no está mas (se cambió de carrera)
+    subjects_to_check = alumnos_programa[alumnos_programa['C_BAJA'] == "CC"]
+    subjects_to_check["found_in_plans_materias"] = False
 
-        # obtengo la carrera actual para las personas que se cambiaron de carrera
-        filtered_df = alumnos_programa[(alumnos_programa['C_BAJA'].isnull()) & (alumnos_programa["N_ID_PERSONA"].isin(subjects_to_check["N_ID_PERSONA"]))]
-        # me quedo con una row por N_ID_ALU_PROG
-        current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_ALU_PROG"])
+    # obtengo la carrera actual para las personas que se cambiaron de carrera
+    filtered_df = alumnos_programa[(alumnos_programa['C_BAJA'].isnull()) & (alumnos_programa["N_ID_PERSONA"].isin(subjects_to_check["N_ID_PERSONA"]))]
+    # me quedo con una row por N_ID_ALU_PROG
+    current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_ALU_PROG"])
 
-        # reviso cuales de las materias de la carrera previa, deben ser consideradas para la carrera actual
-        for index, row in subjects_to_check.iterrows():
-            persona_row = current_degree_for_people_with_cc[current_degree_for_people_with_cc["N_ID_PERSONA"] == row["N_ID_PERSONA"]]
-            if not persona_row.empty:
-                current_data = persona_row[["C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION", "c_plan"]]
-                subject_id_to_check = row["N_ID_MATERIA"]
+    # reviso cuales de las materias de la carrera previa, deben ser consideradas para la carrera actual
+    for index, row in subjects_to_check.iterrows():
+        persona_row = current_degree_for_people_with_cc[current_degree_for_people_with_cc["N_ID_PERSONA"] == row["N_ID_PERSONA"]]
+        if not persona_row.empty:
+            current_data = persona_row[["C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION", "c_plan"]]
+            subject_id_to_check = row["N_ID_MATERIA"]
 
-                key_to_find = int(f'{int(current_data["C_IDENTIFICACION"].values[0])}{int(current_data["C_PROGRAMA"].values[0])}{int(current_data["C_ORIENTACION"].values[0])}{int(current_data["c_plan"].values[0])}{int(subject_id_to_check)}')
+            key_to_find = int(f'{int(current_data["C_IDENTIFICACION"].values[0])}{int(current_data["C_PROGRAMA"].values[0])}{int(current_data["C_ORIENTACION"].values[0])}{int(current_data["c_plan"].values[0])}{int(subject_id_to_check)}')
 
-                if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
-                    # busco la materia de la carrera anterior en planes_materias de la carrera actual
-                    subjects_to_check.at[index, "found_in_plans_materias"] = True
-            else:
-                 print(f"No se encontraron materias de otra carrera que corresponden a la actual para la persona: {row['N_ID_PERSONA']} - N_ID_ALU_PROG: {row['N_ID_ALU_PROG']}")
+            if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
+                # busco la materia de la carrera anterior en planes_materias de la carrera actual
+                subjects_to_check.at[index, "found_in_plans_materias"] = True
+        else:
+             print(f"No se encontraron materias de otra carrera que corresponden a la actual para la persona: {row['N_ID_PERSONA']} - N_ID_ALU_PROG: {row['N_ID_ALU_PROG']}")
 
-        # filtro las materias que estan en la carrera actual de la persona
-        valid_subjects = subjects_to_check[subjects_to_check["found_in_plans_materias"] == True]
+    # filtro las materias que estan en la carrera actual de la persona
+    valid_subjects = subjects_to_check[subjects_to_check["found_in_plans_materias"] == True]
 
-        # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
-        filtered_alumnos_programa = alumnos_programa[((alumnos_programa["C_BAJA"] == "CC") & (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"]))) | (alumnos_programa["F_BAJA"].isna())]
+    # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
+    filtered_alumnos_programa = alumnos_programa[((alumnos_programa["C_BAJA"] == "CC") & (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"]))) | (alumnos_programa["F_BAJA"].isna())]
 
-        # para las personas que cambiaron de carrera (["C_BAJA"] == "CC"), se debe considerar el N_ID_ALU_PROG mas alto (pertence a la carrera actual)
-        current_id_alu_prog_for_cc = filtered_alumnos_programa.groupby(["N_ID_PERSONA"])["N_ID_ALU_PROG"].max().reset_index(name='CURRENT_N_ID_ALU_PROG')
-        merged_df = filtered_alumnos_programa.merge(current_id_alu_prog_for_cc, on='N_ID_PERSONA', how='left')
-        merged_df.loc[merged_df["C_BAJA"] == "CC", 'N_ID_ALU_PROG'] = merged_df.loc[merged_df["C_BAJA"] == "CC", 'CURRENT_N_ID_ALU_PROG']
-        merged_df.drop(columns=['CURRENT_N_ID_ALU_PROG'], inplace=True)
-        filtered_alumnos_programa = merged_df
+    # para las personas que cambiaron de carrera (["C_BAJA"] == "CC"), se debe considerar el N_ID_ALU_PROG mas alto (pertence a la carrera actual)
+    current_id_alu_prog_for_cc = filtered_alumnos_programa.groupby(["N_ID_PERSONA"])["N_ID_ALU_PROG"].max().reset_index(name='CURRENT_N_ID_ALU_PROG')
+    merged_df = filtered_alumnos_programa.merge(current_id_alu_prog_for_cc, on='N_ID_PERSONA', how='left')
+    merged_df.loc[merged_df["C_BAJA"] == "CC", 'N_ID_ALU_PROG'] = merged_df.loc[merged_df["C_BAJA"] == "CC", 'CURRENT_N_ID_ALU_PROG']
+    merged_df.drop(columns=['CURRENT_N_ID_ALU_PROG'], inplace=True)
+    filtered_alumnos_programa = merged_df
+    return filtered_alumnos_programa
 
-        # END Chequeo de materias de personas que cambiaron de carrera
-        print("Calculo de materias aprobadas y agrupamiento por alumnx")
-        # agrego a materias de carreras CC y de personas con 2 carreras o más
-        filtered_alumnos_programa = pd.concat([filtered_alumnos_programa, alumnos_programa_to_add], ignore_index=True)
 
-        # elimino el campo c_baja y f_baja
-        filtered_alumnos_programa = filtered_alumnos_programa.drop(columns=["C_BAJA", "F_BAJA"])
-
-        # calculamos falta la suma de las materias aprobadas por alumno con detalle por ano y semestre
-        grouped_alumnos_programa = filtered_alumnos_programa.groupby([
+def calculate_mat_req_and_aprob(filtered_alumnos_programa):
+    # calculamos falta la suma de las materias aprobadas por alumno con detalle por ano y semestre
+    grouped_alumnos_programa = filtered_alumnos_programa.groupby([
             "N_ID_PERSONA",
             "N_ID_ALU_PROG",
             "N_PROMOCION",
@@ -167,30 +163,57 @@ def process_data():
             "semestre",
             "cant_mat_requeridas"
         ]).size().reset_index(name='cant_mat_aprobadas')        
-        grouped_alumnos_programa["estado"] = grouped_alumnos_programa["cant_mat_aprobadas"] - grouped_alumnos_programa["cant_mat_requeridas"]
+    grouped_alumnos_programa["estado"] = grouped_alumnos_programa["cant_mat_aprobadas"] - grouped_alumnos_programa["cant_mat_requeridas"]
 
         # calculamos falta la suma de las materias aprobadas por alumno (si una persona cursa 2 carreras, apareceran 2 rows)
-        grouped_by_alumnos = grouped_alumnos_programa.groupby([
+    grouped_by_alumnos = grouped_alumnos_programa.groupby([
             "N_ID_PERSONA",
             "N_ID_ALU_PROG",
         ]).agg(
              tot_cant_mat_req=('cant_mat_requeridas', 'sum'),
              tot_cant_mat_apr=('cant_mat_aprobadas', 'sum')
         ).reset_index()
-        grouped_by_alumnos["estado"] = grouped_by_alumnos["tot_cant_mat_apr"] - grouped_by_alumnos["tot_cant_mat_req"]
+    grouped_by_alumnos["estado"] = grouped_by_alumnos["tot_cant_mat_apr"] - grouped_by_alumnos["tot_cant_mat_req"]
+    return grouped_alumnos_programa,grouped_by_alumnos
 
-        # agregamos IPO a ambos DFs
-        print("Agregamos IPO a archivos")
-        current_values = filtered_alumnos_programa.groupby(["N_ID_PERSONA", "N_ID_ALU_PROG"]).last().reset_index()
-        grouped_alumnos_programa = grouped_alumnos_programa.merge(current_values[["N_ID_PERSONA", "N_ID_ALU_PROG", "C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION"]],
+
+def add_IPO_to_data(filtered_alumnos_programa, grouped_alumnos_programa, grouped_by_alumnos):
+    print("Agregamos IPO a archivos")
+    current_values = filtered_alumnos_programa.groupby(["N_ID_PERSONA", "N_ID_ALU_PROG"]).last().reset_index()
+    grouped_alumnos_programa = grouped_alumnos_programa.merge(current_values[["N_ID_PERSONA", "N_ID_ALU_PROG", "C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION"]],
                                             on=["N_ID_PERSONA", "N_ID_ALU_PROG"], how="left")
 
-        current_values = filtered_alumnos_programa.groupby(["N_ID_PERSONA", "N_ID_ALU_PROG"]).last().reset_index()
-        grouped_by_alumnos = grouped_by_alumnos.merge(current_values[["N_ID_PERSONA", "N_ID_ALU_PROG", "C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION"]],
+    current_values = filtered_alumnos_programa.groupby(["N_ID_PERSONA", "N_ID_ALU_PROG"]).last().reset_index()
+    grouped_by_alumnos = grouped_by_alumnos.merge(current_values[["N_ID_PERSONA", "N_ID_ALU_PROG", "C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION"]],
                                             on=["N_ID_PERSONA", "N_ID_ALU_PROG"], how="left")
+                                        
+    return grouped_alumnos_programa,grouped_by_alumnos
 
+
+def process_data():
+        alumnos_programa, planes_materias, materias_carrera = get_data_with_queries()
+
+        # Chequeo de materias de personas que cursan 2 carreras o más
+        alumnos_programa_to_add = check_2_more_degrees(alumnos_programa, planes_materias, materias_carrera)
+
+        # Chequeo de materias de personas que cambiaron de carrera
+        filtered_alumnos_programa = check_degree_changes(alumnos_programa, planes_materias)
+
+        # agrego a materias de carreras CC y de personas con 2 carreras o más
+        filtered_alumnos_programa = pd.concat([filtered_alumnos_programa, alumnos_programa_to_add], ignore_index=True)
+
+        # elimino el campo c_baja y f_baja
+        filtered_alumnos_programa = filtered_alumnos_programa.drop(columns=["C_BAJA", "F_BAJA"])
+
+        print("Cálculo de materias aprobadas y agrupamiento por alumnx")
+        grouped_alumnos_programa, grouped_by_alumnos = calculate_mat_req_and_aprob(filtered_alumnos_programa)
+
+        grouped_alumnos_programa, grouped_by_alumnos = add_IPO_to_data(filtered_alumnos_programa, grouped_alumnos_programa, grouped_by_alumnos)
+
+        # generamos archivos csv de la data necesaria para el dashboard
         grouped_alumnos_programa.to_csv("grouped_alumnos_programa.csv", index=False)
         grouped_by_alumnos.to_csv("grouped_by_alumnos.csv", index=False)
+
 
 
 with DAG(
