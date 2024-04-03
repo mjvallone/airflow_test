@@ -122,15 +122,15 @@ def check_degree_changes(alumnos_programa, planes_materias):
     print("Chequeo de materias de personas que cambiaron de carrera")
     #obtengo las materias que son de una carrera en la cual la persona no está mas (se cambió de carrera)
     subjects_to_check = alumnos_programa[alumnos_programa['C_BAJA'] == "CC"]
-    subjects_to_check["found_in_plans_materias"] = False
 
     # obtengo la carrera actual para las personas que se cambiaron de carrera
     filtered_df = alumnos_programa[(alumnos_programa['C_BAJA'].isnull()) & (alumnos_programa["N_ID_PERSONA"].isin(subjects_to_check["N_ID_PERSONA"]))]
     # me quedo con una row por N_ID_ALU_PROG
     current_degree_for_people_with_cc = filtered_df.drop_duplicates(subset=["N_ID_ALU_PROG"])
+    valid_subjects = []
 
     # reviso cuales de las materias de la carrera previa, deben ser consideradas para la carrera actual
-    for index, row in subjects_to_check.iterrows():
+    for _, row in subjects_to_check.iterrows():
         persona_row = current_degree_for_people_with_cc[current_degree_for_people_with_cc["N_ID_PERSONA"] == row["N_ID_PERSONA"]]
         if not persona_row.empty:
             current_data = persona_row[["C_IDENTIFICACION", "C_PROGRAMA", "C_ORIENTACION", "c_plan"]]
@@ -138,25 +138,28 @@ def check_degree_changes(alumnos_programa, planes_materias):
 
             key_to_find = int(f'{int(current_data["C_IDENTIFICACION"].values[0])}{int(current_data["C_PROGRAMA"].values[0])}{int(current_data["C_ORIENTACION"].values[0])}{int(current_data["c_plan"].values[0])}{int(subject_id_to_check)}')
 
-            if (planes_materias[planes_materias["unique_key"] == key_to_find]).empty == False:
-                # busco la materia de la carrera anterior en planes_materias de la carrera actual
-                subjects_to_check.at[index, "found_in_plans_materias"] = True
+            # busco la materia de la carrera anterior en planes_materias de la carrera actual
+            if not (planes_materias[planes_materias["unique_key"] == key_to_find]).empty:
+                valid_subjects.append(row["N_ID_MATERIA"])
         else:
              print(f"No se encontraron materias de otra carrera que corresponden a la actual para la persona: {row['N_ID_PERSONA']} - N_ID_ALU_PROG: {row['N_ID_ALU_PROG']}")
 
-    # filtro las materias que estan en la carrera actual de la persona
-    valid_subjects = subjects_to_check[subjects_to_check["found_in_plans_materias"] == True]
-
     # quito de alumnos_programa las rows con las materias que no corresponden o son de una carrera dada de baja
-    filtered_alumnos_programa = alumnos_programa[((alumnos_programa["C_BAJA"] == "CC") & (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects["N_ID_MATERIA"]))) | (alumnos_programa["F_BAJA"].isna())]
+    filtered_alumnos_programa = alumnos_programa[
+        (
+            (alumnos_programa["C_BAJA"] == "CC") & 
+            (alumnos_programa["N_ID_MATERIA"].isin(valid_subjects))
+         ) | 
+         (alumnos_programa["F_BAJA"].isna())
+    ]
 
     # para las personas que cambiaron de carrera (["C_BAJA"] == "CC"), se debe considerar el N_ID_ALU_PROG mas alto (pertence a la carrera actual)
     current_id_alu_prog_for_cc = filtered_alumnos_programa.groupby(["N_ID_PERSONA"])["N_ID_ALU_PROG"].max().reset_index(name='CURRENT_N_ID_ALU_PROG')
     merged_df = filtered_alumnos_programa.merge(current_id_alu_prog_for_cc, on='N_ID_PERSONA', how='left')
     merged_df.loc[merged_df["C_BAJA"] == "CC", 'N_ID_ALU_PROG'] = merged_df.loc[merged_df["C_BAJA"] == "CC", 'CURRENT_N_ID_ALU_PROG']
     merged_df.drop(columns=['CURRENT_N_ID_ALU_PROG'], inplace=True)
-    filtered_alumnos_programa = merged_df
-    return filtered_alumnos_programa
+
+    return merged_df
 
 
 def calculate_mat_req_and_aprob(filtered_alumnos_programa):
